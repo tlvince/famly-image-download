@@ -13,6 +13,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
+	"github.com/google/uuid"
 
 	"github.com/jessevdk/go-flags"
 )
@@ -30,6 +31,12 @@ func main() {
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		fmt.Println("Error parsing flags:", err)
+		return
+	}
+
+	// Validate ChildID is a valid UUID
+	if _, err := uuid.Parse(opts.ChildID); err != nil {
+		fmt.Println("Invalid ChildID format. It should be a valid UUID:", err)
 		return
 	}
 
@@ -87,15 +94,29 @@ func main() {
 
 	// Read famly.accessToken from localStorage
 	var accessToken string
+	var installationId string
 	err = chromedp.Run(ctx,
 		chromedp.EvaluateAsDevTools(`window.localStorage.getItem("famly.accessToken")`, &accessToken),
+		chromedp.EvaluateAsDevTools(`window.localStorage.getItem("famly.installationId")`, &installationId),
+		chromedp.Sleep(1*time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if accessToken == "" {
+				return fmt.Errorf("famly.accessToken not found in localStorage")
+			}
+			if installationId == "" {
+				return fmt.Errorf("famly.installationid not found in localStorage")
+			}
+			return nil
+		}),
 	)
 	if err != nil {
-		fmt.Println("Error reading famly.accessToken:", err)
+		fmt.Println("Error reading famly data:", err)
 		return
 	}
 	accessToken = strings.ReplaceAll(accessToken, `"`, "")
 	fmt.Printf("famly.accessToken: '%s'\n", accessToken)
+	installationId = strings.ReplaceAll(installationId, `"`, "")
+	fmt.Printf("famly.installationId: '%s'\n", installationId)
 
 	// Download all images using pagination with olderThan
 	var (
@@ -122,8 +143,9 @@ func main() {
 		}
 		req.URL.RawQuery = q.Encode()
 		req.Header.Set("x-famly-accesstoken", accessToken)
+		req.Header.Set("x-famly-installationid", installationId)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("accept", "application/json")
 		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
 
 		resp, err := client.Do(req)
