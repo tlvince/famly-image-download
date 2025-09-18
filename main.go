@@ -1,30 +1,24 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
-
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/chromedp"
-	"github.com/google/uuid"
 
 	"github.com/jessevdk/go-flags"
 )
 
 var opts struct {
-	Website   string  `short:"w" long:"website" description:"Website URL for famly app" default:"https://app.nfamilyclub.com/" env:"WEBSITE" required:"true"`
-	Email     string  `short:"e" long:"email" description:"Email address for famly app login" env:"EMAIL" required:"true"`
-	Password  string  `short:"p" long:"password" description:"Password for famly app login" env:"PASSWORD" required:"true"`
-	ChildID   string  `long:"childid" description:"Child ID for child in famly app" env:"CHILDID" required:"true"`
-	Latitude  float64 `long:"latitude" description:"Latitude to use for EXIF data" env:"LATITUDE"`
-	Longitude float64 `long:"longitude" description:"Longitude to use for EXIF data" env:"LONGITUDE"`
+	Website        string  `short:"w" long:"website" description:"Website URL for famly app" default:"https://app.nfamilyclub.com/" env:"WEBSITE" required:"true"`
+	ChildID        string  `long:"childid" description:"Child ID for child in famly app" env:"CHILDID" required:"true"`
+	Latitude       float64 `long:"latitude" description:"Latitude to use for EXIF data" env:"LATITUDE"`
+	Longitude      float64 `long:"longitude" description:"Longitude to use for EXIF data" env:"LONGITUDE"`
+	AccessToken    string  `long:"accessToken" description:"Access Token (x-famly-accesstoken request header)" env:"ACCESS_TOKEN" required:"true"`
+	InstallationId string  `long:"installationId" description:"Installation ID (x-famly-installationid request header)" env:"INSTALLATION_ID" required:"true"`
 }
 
 func main() {
@@ -34,89 +28,8 @@ func main() {
 		return
 	}
 
-	// Validate ChildID is a valid UUID
-	if _, err := uuid.Parse(opts.ChildID); err != nil {
-		fmt.Println("Invalid ChildID format. It should be a valid UUID:", err)
-		return
-	}
-
-	// Connect to an existing Chrome instance
-	allocatorCtx, cancel := chromedp.NewRemoteAllocator(context.Background(), "ws://localhost:9222/devtools/browser")
-	defer cancel()
-
-	ctx, cancelCtx := chromedp.NewContext(allocatorCtx)
-	defer cancelCtx()
-
-	var pageTitle string
-	var emailInputFound bool
-
-	err = chromedp.Run(ctx,
-		chromedp.Navigate(opts.Website),
-		chromedp.Sleep(5*time.Second),
-
-		// Try to find the email input, but don't fail if not found
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			var nodes []*cdp.Node
-			err := chromedp.Nodes(`input[type="email"]`, &nodes, chromedp.AtLeast(0)).Do(ctx)
-			emailInputFound = len(nodes) > 0
-			return err
-		}),
-	)
-	if err != nil {
-		fmt.Println("Error navigating:", err)
-		return
-	}
-
-	if emailInputFound {
-		// Perform login
-		err = chromedp.Run(ctx,
-			chromedp.SendKeys(`input[type="email"]`, opts.Email, chromedp.ByQuery),
-			chromedp.SendKeys(`input[type="password"]`, opts.Password, chromedp.ByQuery),
-			chromedp.Click(`button[type="submit"]`, chromedp.ByQuery),
-			chromedp.Sleep(3*time.Second),
-			chromedp.Title(&pageTitle),
-		)
-		if err != nil {
-			fmt.Println("Error during login:", err)
-			return
-		}
-		fmt.Println("Logged in! Page Title:", pageTitle)
-	} else {
-		// Already logged in
-		err = chromedp.Run(ctx, chromedp.Title(&pageTitle))
-		fmt.Println("Already logged in! Page Title:", pageTitle)
-
-		if err != nil {
-			fmt.Println("Error checking page title:", err)
-			return
-		}
-	}
-
-	// Read famly.accessToken from localStorage
-	var accessToken string
-	var installationId string
-	err = chromedp.Run(ctx,
-		chromedp.EvaluateAsDevTools(`window.localStorage.getItem("famly.accessToken")`, &accessToken),
-		chromedp.EvaluateAsDevTools(`window.localStorage.getItem("famly.installationId")`, &installationId),
-		chromedp.Sleep(1*time.Second),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			if accessToken == "" {
-				return fmt.Errorf("famly.accessToken not found in localStorage")
-			}
-			if installationId == "" {
-				return fmt.Errorf("famly.installationid not found in localStorage")
-			}
-			return nil
-		}),
-	)
-	if err != nil {
-		fmt.Println("Error reading famly data:", err)
-		return
-	}
-	accessToken = strings.ReplaceAll(accessToken, `"`, "")
-	fmt.Printf("famly.accessToken: '%s'\n", accessToken)
-	installationId = strings.ReplaceAll(installationId, `"`, "")
-	fmt.Printf("famly.installationId: '%s'\n", installationId)
+	var accessToken = opts.AccessToken
+	var installationId = opts.InstallationId
 
 	// Download all images using pagination with olderThan
 	var (
@@ -185,8 +98,13 @@ func main() {
 				oldest = img.CreatedAt
 			}
 
+			createdAtUtc := img.CreatedAt.UTC()
+			dateTime := createdAtUtc.Format("20060102_150405")
+			milliseconds := fmt.Sprintf("%03d", createdAtUtc.Nanosecond()/1e6)
+			dateTimeStr := dateTime + milliseconds
+
 			// skip if image already exists
-			if _, err := os.Stat(fmt.Sprintf("output/%s-%s.jpg", img.CreatedAt.Format(time.DateOnly), img.ImageID)); err == nil {
+			if _, err := os.Stat(fmt.Sprintf("output/%s_%s.jpg", dateTimeStr, img.ImageID)); err == nil {
 				fmt.Printf("Image %s already exists, skipping...\n", img.ImageID)
 				continue
 			}
@@ -209,7 +127,7 @@ func main() {
 					continue
 				}
 			}
-			fileName := fmt.Sprintf("output/%s-%s.jpg", img.CreatedAt.Format(time.DateOnly), img.ImageID)
+			fileName := fmt.Sprintf("output/%s_%s.jpg", dateTimeStr, img.ImageID)
 			outFile, err := os.Create(fileName)
 			if err != nil {
 				fmt.Println("Error creating output file:", err)
@@ -236,13 +154,6 @@ func main() {
 		page++
 	}
 
-	err = chromedp.Run(ctx,
-		chromedp.Sleep(10*time.Second),
-	)
-	if err != nil {
-		fmt.Println("Error during final wait:", err)
-		return
-	}
 	fmt.Println("All done here.")
 }
 
@@ -255,6 +166,7 @@ func updateExifData(imagePath string, createdAt time.Time, latitude, longitude f
 
 	// Format datetime for EXIF (YYYY:MM:DD HH:MM:SS)
 	dateTimeStr := createdAt.Format("2006:01:02 15:04:05")
+	offsetStr := createdAt.Format("-07:00")
 
 	// Convert coordinates to EXIF format
 	latRef := "N"
@@ -275,6 +187,8 @@ func updateExifData(imagePath string, createdAt time.Time, latitude, longitude f
 	cmd := exec.Command("exiftool",
 		"-overwrite_original",
 		"-DateTimeOriginal="+dateTimeStr,
+		"-OffsetTimeOriginal="+offsetStr,
+		"-SubSecTimeOriginal=000",
 		"-CreateDate="+dateTimeStr,
 		"-ModifyDate="+dateTimeStr,
 		fmt.Sprintf("-GPSLatitude=%f", lat),
