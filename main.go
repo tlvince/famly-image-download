@@ -28,6 +28,13 @@ func main() {
 		return
 	}
 
+	downloadedIDs, err := loadState()
+	if err != nil {
+		fmt.Println("Error loading state:", err)
+		return
+	}
+	defer saveState(downloadedIDs)
+
 	var accessToken = opts.AccessToken
 	var installationId = opts.InstallationId
 
@@ -103,9 +110,9 @@ func main() {
 			milliseconds := fmt.Sprintf("%03d", createdAtUtc.Nanosecond()/1e6)
 			dateTimeStr := dateTime + milliseconds
 
-			// skip if image already exists
-			if _, err := os.Stat(fmt.Sprintf("output/%s_%s.jpg", dateTimeStr, img.ImageID)); err == nil {
-				fmt.Printf("Image %s already exists, skipping...\n", img.ImageID)
+			// skip if image already downloaded
+			if _, exists := downloadedIDs[img.ImageID]; exists {
+				fmt.Printf("Image %s already downloaded, skipping...\n", img.ImageID)
 				continue
 			}
 
@@ -150,6 +157,7 @@ func main() {
 			}
 
 			fmt.Printf("Image %s saved to %s\n", img.ImageID, fileName)
+			downloadedIDs[img.ImageID] = time.Now()
 		}
 
 		page++
@@ -206,5 +214,30 @@ func updateExifData(imagePath string, createdAt time.Time, latitude, longitude f
 	}
 
 	return nil
+}
 
+func loadState() (map[string]time.Time, error) {
+	ids := make(map[string]time.Time)
+	data, err := os.ReadFile("state.json")
+	if os.IsNotExist(err) {
+		return ids, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return ids, nil
+	}
+	if err := json.Unmarshal(data, &ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func saveState(downloadedIDs map[string]time.Time) error {
+	data, err := json.MarshalIndent(downloadedIDs, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile("state.json", data, 0644)
 }
