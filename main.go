@@ -116,8 +116,8 @@ func main() {
 				continue
 			}
 
-			fullSizedImageUrl := fmt.Sprintf("%s/%dx%d/%s", img.Prefix, img.Width, img.Height, img.Key)
-			resp, err := http.Get(fullSizedImageUrl)
+			originalImageUrl := fmt.Sprintf("%s/%s", img.Prefix, img.Key)
+			resp, err := http.Get(originalImageUrl)
 			if err != nil {
 				fmt.Println("Error downloading image:", err)
 				continue
@@ -204,6 +204,7 @@ func updateExifData(imagePath string, createdAt time.Time, latitude, longitude f
 		"-GPSLatitudeRef="+latRef,
 		fmt.Sprintf("-GPSLongitude=%f", lon),
 		"-GPSLongitudeRef="+lonRef,
+		"-Comment=",
 		imagePath,
 	)
 
